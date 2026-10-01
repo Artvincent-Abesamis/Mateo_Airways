@@ -1,0 +1,8 @@
+{
+    "java.project.sourcePaths": ["src"],
+    "java.project.outputPath": "bin",
+    "code-runner.runInTerminal": true,
+    "code-runner.executorMap": {
+        "java": "cd \"$workspaceRoot\"; if ($?) { javac -sourcepath src -d bin src/airline/Main.java }; if ($?) { java -cp bin airline.Main }"
+    }
+}

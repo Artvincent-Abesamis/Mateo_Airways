@@ -43,8 +43,8 @@ public class DataStore implements Serializable {
     }
 
     private void seed() {
-        users.put("admin", new Admin("admin", "admin123", "System Administrator", "admin@skyline.example"));
-        users.put("agent", new BookingAgent("agent", "agent123", "Ana Agent", "agent@skyline.example"));
+        users.put("admin", new Admin("admin", "admin123", "System Administrator", "admin@mateoairways.example"));
+        users.put("agent", new BookingAgent("agent", "agent123", "Ana Agent", "agent@mateoairways.example"));
         users.put("juan", new Passenger("juan", "juan123", "Juan Dela Cruz", "juan@example.com"));
 
         LocalDateTime base = LocalDateTime.now().plusDays(3).withHour(6).withMinute(30).withSecond(0).withNano(0);

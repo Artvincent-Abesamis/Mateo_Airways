@@ -18,17 +18,19 @@ public class AirlineService {
     public Passenger register(String username, String password, String fullName, String email) {
         if (username == null || username.isBlank() || password == null || password.length() < 4)
             throw new IllegalArgumentException("Username required and password must be at least 4 characters.");
+        username = username.trim().toLowerCase();
+        if (username.contains(" ")) throw new IllegalArgumentException("Username cannot contain spaces.");
         if (fullName == null || fullName.isBlank()) throw new IllegalArgumentException("Full name is required.");
-        if (store.getUsers().containsKey(username.toLowerCase()))
+        if (store.getUsers().containsKey(username))
             throw new IllegalArgumentException("Username already taken.");
-        Passenger p = new Passenger(username.toLowerCase(), password, fullName.trim(), email);
+        Passenger p = new Passenger(username, password, fullName.trim(), email == null ? "" : email.trim());
         store.getUsers().put(p.getUsername(), p);
         store.save();
         return p;
     }
 
     public User login(String username, String password) {
-        User u = store.getUsers().get(username == null ? "" : username.toLowerCase());
+        User u = store.getUsers().get(username == null ? "" : username.trim().toLowerCase());
         if (u == null || !u.checkPassword(password)) throw new IllegalArgumentException("Invalid username or password.");
         if (!u.isActive()) throw new IllegalStateException("This account has been deactivated.");
         return u;
@@ -51,14 +53,12 @@ public class AirlineService {
 
     public void setUserActive(User actor, String username, boolean active) {
         require(actor, Role.ADMIN);
-        User u = store.getUsers().get(username.toLowerCase());
+        User u = store.getUsers().get(username.trim().toLowerCase());
         if (u == null) throw new IllegalArgumentException("User not found.");
         if (u.getUsername().equals(actor.getUsername())) throw new IllegalArgumentException("You cannot deactivate yourself.");
         u.setActive(active);
         store.save();
     }
-
-    public User findUser(String username) { return store.getUsers().get(username.toLowerCase()); }
 
     // ------------------------------------------------------------ flights
     public List<Flight> searchFlights(String origin, String destination, LocalDate date) {
@@ -81,6 +81,7 @@ public class AirlineService {
         if (origin.isBlank() || dest.isBlank() || origin.equalsIgnoreCase(dest))
             throw new IllegalArgumentException("Origin and destination must be different and non-empty.");
         if (basePrice <= 0) throw new IllegalArgumentException("Price must be positive.");
+        if (dep.isBefore(LocalDateTime.now())) throw new IllegalArgumentException("Departure must be in the future.");
         Flight f = new Flight(store.nextFlightId(), origin.trim(), dest.trim(), dep, basePrice);
         store.getFlights().put(f.getId(), f);
         store.save();
@@ -90,13 +91,17 @@ public class AirlineService {
     public void updateFlight(User actor, String id, String origin, String dest, LocalDateTime dep, Double price) {
         require(actor, Role.ADMIN);
         Flight f = getFlight(id);
-        if (origin != null) f.setOrigin(origin);
-        if (dest != null) f.setDestination(dest);
+        String newOrigin = origin != null ? origin.trim() : f.getOrigin();
+        String newDest = dest != null ? dest.trim() : f.getDestination();
+        if (newOrigin.equalsIgnoreCase(newDest))
+            throw new IllegalArgumentException("Origin and destination must be different.");
+        if (price != null && price <= 0) throw new IllegalArgumentException("Price must be positive.");
+        if (dep != null && dep.isBefore(LocalDateTime.now()))
+            throw new IllegalArgumentException("Departure must be in the future.");
+        f.setOrigin(newOrigin);
+        f.setDestination(newDest);
         if (dep != null) f.setDeparture(dep);
-        if (price != null) {
-            if (price <= 0) throw new IllegalArgumentException("Price must be positive.");
-            f.setBasePrice(price);
-        }
+        if (price != null) f.setBasePrice(price);
         store.save();
     }
 
@@ -147,6 +152,7 @@ public class AirlineService {
         ensureBookable(f);
         Seat target = f.getSeat(newSeatId);
         if (target == null) throw new IllegalArgumentException("Seat does not exist.");
+        if (target.getId().equals(r.getSeatId())) throw new IllegalStateException("You are already in seat " + target.getId() + ".");
         if (target.isBooked()) throw new IllegalStateException("Seat " + target.getId() + " is already taken.");
 
         Seat old = f.getSeat(r.getSeatId());
@@ -171,9 +177,9 @@ public class AirlineService {
 
     public List<Reservation> reservationsFor(User actor, String passengerUsername) {
         require(actor, Role.PASSENGER, Role.AGENT);
-        checkPassengerAccess(actor, passengerUsername);
+        User p = checkPassengerAccess(actor, passengerUsername);
         return store.getReservations().values().stream()
-                .filter(r -> r.getPassengerUsername().equals(passengerUsername.toLowerCase()))
+                .filter(r -> r.getPassengerUsername().equals(p.getUsername()))
                 .collect(Collectors.toList());
     }
 
@@ -184,6 +190,7 @@ public class AirlineService {
 
     public String ticket(Reservation r) {
         Flight f = store.getFlights().get(r.getFlightId());
+        if (f == null) return "Flight " + r.getFlightId() + " no longer exists; this reservation (" + r.getPnr() + ") was cancelled.";
         User u = store.getUsers().get(r.getPassengerUsername());
         return r.toTicket(f, u == null ? r.getPassengerUsername() : u.getFullName());
     }
@@ -217,7 +224,7 @@ public class AirlineService {
 
     /** Passengers may only act on themselves; agents may act on any passenger account. */
     private User checkPassengerAccess(User actor, String passengerUsername) {
-        User p = store.getUsers().get(passengerUsername.toLowerCase());
+        User p = store.getUsers().get(passengerUsername == null ? "" : passengerUsername.trim().toLowerCase());
         if (p == null || p.getRole() != Role.PASSENGER) throw new IllegalArgumentException("Passenger account not found.");
         if (actor.getRole() == Role.PASSENGER && !actor.getUsername().equals(p.getUsername()))
             throw new SecurityException("You can only access your own bookings.");

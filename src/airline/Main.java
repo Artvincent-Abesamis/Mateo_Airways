@@ -2,21 +2,28 @@ package airline;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Scanner;
 
-/** Console user interface. */
+/** Console user interface. Runs only inside the VS Code integrated terminal. */
 public class Main {
     private static final Scanner in = new Scanner(System.in);
     private static DataStore store;
     private static AirlineService svc;
 
     public static void main(String[] args) {
+        if (!runningInVsCode()) {
+            System.err.println("Mateo Airways must be run from the integrated terminal of Visual Studio Code.");
+            System.err.println("Open this folder in VS Code, then press Run (or use Terminal > New Terminal).");
+            System.exit(1);
+        }
+
         store = DataStore.load();
         svc = new AirlineService(store);
         System.out.println("=====================================");
-        System.out.println("   SKYLINE AIRLINE RESERVATION SYSTEM");
+        System.out.println("   MATEO AIRWAYS RESERVATION SYSTEM");
         System.out.println("=====================================");
         System.out.println("Demo logins: admin/admin123, agent/agent123, juan/juan123");
         try {
@@ -29,30 +36,40 @@ public class Main {
                     default: System.out.println("Invalid choice.");
                 }
             }
-        } catch (NoSuchElementException eof) {
+        } catch (NoSuchElementException eof) {   // input stream closed (Ctrl+D / Ctrl+Z)
             store.save();
         }
     }
 
-    // ------------------------------------------------------------ auth
-    private static void login() {
-        try {
-            User u = svc.login(ask("Username"), ask("Password"));
-            System.out.println("\nWelcome, " + u.getFullName() + " [" + u.getRole() + "]");
-            switch (u.getRole()) {
-                case ADMIN: adminMenu(u); break;
-                case AGENT: agentMenu(u); break;
-                default: passengerMenu(u);
-            }
-        } catch (RuntimeException e) { System.out.println("! " + e.getMessage()); }
+    /** VS Code sets TERM_PROGRAM=vscode in every integrated terminal and in Run/Debug sessions that use one. */
+    private static boolean runningInVsCode() {
+        return "vscode".equalsIgnoreCase(System.getenv("TERM_PROGRAM"));
     }
 
-    private static String registerFlow() {
+    // ------------------------------------------------------------ auth
+    private static void login() {
+        User u;
+        try {
+            u = svc.login(ask("Username"), ask("Password"));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            System.out.println("! " + e.getMessage());
+            return;
+        }
+        System.out.println("\nWelcome, " + u.getFullName() + " [" + u.getRole() + "]");
+        switch (u.getRole()) {
+            case ADMIN: adminMenu(u); break;
+            case AGENT: agentMenu(u); break;
+            default: passengerMenu(u);
+        }
+    }
+
+    private static void registerFlow() {
         try {
             Passenger p = svc.register(ask("Username"), ask("Password (min 4 chars)"), ask("Full name"), ask("Email"));
             System.out.println("Account created: " + p.getUsername());
-            return p.getUsername();
-        } catch (RuntimeException e) { System.out.println("! " + e.getMessage()); return null; }
+        } catch (IllegalArgumentException e) {
+            System.out.println("! " + e.getMessage());
+        }
     }
 
     // ------------------------------------------------------------ menus
@@ -69,8 +86,7 @@ public class Main {
                     case "3": updateFlight(u); break;
                     case "4": {
                         String id = ask("Flight ID");
-                        FlightStatus s = FlightStatus.valueOf(ask("Status (SCHEDULED/DELAYED/CANCELLED)").toUpperCase());
-                        svc.updateStatus(u, id, s);
+                        svc.updateStatus(u, id, parseStatus(ask("Status (SCHEDULED/DELAYED/CANCELLED)")));
                         System.out.println("Status updated.");
                         break;
                     }
@@ -79,7 +95,7 @@ public class Main {
                         System.out.println("Flight removed. " + n + " reservation(s) cancelled.");
                         break;
                     }
-                    case "6": svc.allReservations(u).forEach(System.out::println); break;
+                    case "6": printAll(svc.allReservations(u), "No reservations yet."); break;
                     case "7": svc.listUsers(u).forEach(System.out::println); break;
                     case "8": {
                         String name = ask("Username");
@@ -152,8 +168,7 @@ public class Main {
         String o = ask("Origin (blank = any)");
         String d = ask("Destination (blank = any)");
         String ds = ask("Date yyyy-MM-dd (blank = any)");
-        LocalDate date = ds.isBlank() ? null : LocalDate.parse(ds);
-        printFlights(svc.searchFlights(o, d, date));
+        printFlights(svc.searchFlights(o, d, ds.isBlank() ? null : parseDate(ds)));
     }
 
     private static void bookFlow(User actor, String passengerUsername) {
@@ -161,10 +176,13 @@ public class Main {
         Flight f = svc.getFlight(ask("Flight ID to book"));
         printSeatMap(f);
         String seat = ask("Seat (e.g. 7A)").toUpperCase();
-        System.out.println("Payment: 1. Credit Card  2. GCash  3. PayPal");
-        PaymentMethod m = PaymentMethod.values()[Integer.parseInt(ask("Method")) - 1];
         Seat s = f.getSeat(seat);
-        if (s != null) System.out.printf("Total: PHP %,.2f (%s)%n", f.priceFor(s.getFareClass()), s.getFareClass().getLabel());
+        if (s == null) throw new IllegalArgumentException("Seat does not exist.");
+        if (s.isBooked()) throw new IllegalStateException("Seat " + s.getId() + " is already taken.");
+
+        System.out.println("Payment: 1. Credit Card  2. GCash  3. PayPal");
+        PaymentMethod m = parsePayment(ask("Method"));
+        System.out.printf("Total: PHP %,.2f (%s)%n", f.priceFor(s.getFareClass()), s.getFareClass().getLabel());
         if (!ask("Confirm and pay? (y/n)").equalsIgnoreCase("y")) { System.out.println("Cancelled."); return; }
         Reservation r = svc.book(actor, passengerUsername, f.getId(), seat, m);
         System.out.println("\nPayment successful!\n" + svc.ticket(r));
@@ -182,11 +200,10 @@ public class Main {
 
     private static void modifyFlow(User actor) {
         String pnr = ask("PNR");
-        Reservation r = null;
-        for (Reservation x : svc.reservationsFor(actor, actor.getRole() == Role.PASSENGER ? actor.getUsername()
-                : ask("Passenger username")))
-            if (x.getPnr().equalsIgnoreCase(pnr)) r = x;
-        if (r == null) throw new IllegalArgumentException("Reservation not found.");
+        String owner = actor.getRole() == Role.PASSENGER ? actor.getUsername() : ask("Passenger username");
+        Reservation r = svc.reservationsFor(actor, owner).stream()
+                .filter(x -> x.getPnr().equalsIgnoreCase(pnr)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Reservation not found."));
         printSeatMap(svc.getFlight(r.getFlightId()));
         double diff = svc.changeSeat(actor, pnr, ask("New seat"));
         System.out.printf("Seat changed. Price difference: PHP %,.2f%n", diff);
@@ -202,8 +219,8 @@ public class Main {
 
     private static void addFlight(User u) {
         Flight f = svc.addFlight(u, ask("Origin"), ask("Destination"),
-                LocalDateTime.parse(ask("Departure (yyyy-MM-dd HH:mm)").replace(' ', 'T')),
-                Double.parseDouble(ask("Economy base price")));
+                parseDateTime(ask("Departure (yyyy-MM-dd HH:mm)")),
+                parsePrice(ask("Economy base price")));
         System.out.println("Added: " + f);
     }
 
@@ -214,19 +231,23 @@ public class Main {
         String t = ask("New departure yyyy-MM-dd HH:mm (blank = keep)");
         String p = ask("New base price (blank = keep)");
         svc.updateFlight(u, id, o.isBlank() ? null : o, d.isBlank() ? null : d,
-                t.isBlank() ? null : LocalDateTime.parse(t.replace(' ', 'T')),
-                p.isBlank() ? null : Double.parseDouble(p));
+                t.isBlank() ? null : parseDateTime(t),
+                p.isBlank() ? null : parsePrice(p));
         System.out.println("Flight updated.");
     }
 
-    // ------------------------------------------------------------ display / input
+    // ------------------------------------------------------------ display
     private static void printFlights(List<Flight> list) {
-        if (list.isEmpty()) System.out.println("No flights found.");
+        printAll(list, "No flights found.");
+    }
+
+    private static <T> void printAll(List<T> list, String emptyMessage) {
+        if (list.isEmpty()) System.out.println(emptyMessage);
         list.forEach(System.out::println);
     }
 
     private static void printSeatMap(Flight f) {
-        System.out.println("\nSeat map for " + f.getId() + "   ([XX] = taken)");
+        System.out.println("\nSeat map for " + f.getId() + "   ([XX ] = taken)");
         for (int row = 1; row <= Flight.ROWS; row++) {
             StringBuilder sb = new StringBuilder(String.format("%2d ", row));
             FareClass fc = null;
@@ -239,8 +260,38 @@ public class Main {
         }
     }
 
+    // ------------------------------------------------------------ input
     private static String ask(String prompt) {
         System.out.print(prompt + ": ");
         return in.nextLine().trim();
+    }
+
+    private static LocalDate parseDate(String s) {
+        try { return LocalDate.parse(s); }
+        catch (DateTimeParseException e) { throw new IllegalArgumentException("Invalid date. Use yyyy-MM-dd."); }
+    }
+
+    private static LocalDateTime parseDateTime(String s) {
+        try { return LocalDateTime.parse(s.replace(' ', 'T')); }
+        catch (DateTimeParseException e) { throw new IllegalArgumentException("Invalid date/time. Use yyyy-MM-dd HH:mm."); }
+    }
+
+    private static double parsePrice(String s) {
+        try { return Double.parseDouble(s); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException("Invalid price."); }
+    }
+
+    private static FlightStatus parseStatus(String s) {
+        try { return FlightStatus.valueOf(s.toUpperCase()); }
+        catch (IllegalArgumentException e) { throw new IllegalArgumentException("Status must be SCHEDULED, DELAYED or CANCELLED."); }
+    }
+
+    private static PaymentMethod parsePayment(String s) {
+        switch (s) {
+            case "1": return PaymentMethod.CREDIT_CARD;
+            case "2": return PaymentMethod.GCASH;
+            case "3": return PaymentMethod.PAYPAL;
+            default: throw new IllegalArgumentException("Choose 1, 2 or 3 for the payment method.");
+        }
     }
 }
