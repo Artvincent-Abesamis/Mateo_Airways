@@ -3,6 +3,13 @@
     "configurations": [
         {
             "type": "java",
+            "name": "Main",
+            "request": "launch",
+            "mainClass": "airline.Main",
+            "projectName": "Mateo_Airways_46e357e0"
+        },
+        {
+            "type": "java",
             "name": "Mateo Airways",
             "request": "launch",
             "mainClass": "airline.Main",
